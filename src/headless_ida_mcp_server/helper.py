@@ -166,7 +166,7 @@ class IDA():
     def list_functions(self) -> list[Function]:
         """List all functions in the database"""
         return [self.get_function(address) for address in self.idautils.Functions()]
-    
+
     def decompile_checked(self,address: int):
         if not self.ida_hexrays.init_hexrays_plugin():
             raise IDAError("Hex-Rays decompiler is not available")
@@ -200,10 +200,7 @@ class IDA():
             line = self.ida_lines.tag_remove(sl.line)
             if len(pseudocode) > 0:
                 pseudocode += "\n"
-            if addr is None:
-                pseudocode += f"/* line: {i} */ {line}"
-            else:
-                pseudocode += f"/* line: {i}, address: {addr} */ {line}"
+            pseudocode += f"{line}"
 
         return pseudocode
 

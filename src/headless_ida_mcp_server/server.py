@@ -1,22 +1,33 @@
 # -*- coding: utf-8 -*-
 from mcp.server import FastMCP
 from mcp.server.fastmcp.prompts import base
+import anyio
 from functools import wraps
 from typing import Any, Callable, get_type_hints, TypedDict, Optional, Annotated
 import struct
 from headless_ida_mcp_server.helper import IDA
 from headless_ida_mcp_server.logger import logger
-from headless_ida_mcp_server import PORT,TRANSPORT
+from headless_ida_mcp_server import PORT,TRANSPORT,HOST
 
 mcp = FastMCP("IDA MCP Server", port=PORT)
 ida = None
 
 @mcp.tool()
-def set_binary_path(path: Annotated[str, "Path to the binary file"]):
+async def set_binary_path(path: Annotated[str, "Path to the binary file"]):
     """Set the path to the binary file"""
     global ida
-    ida = IDA(path)
+    ida = await anyio.to_thread.run_sync(lambda: IDA(path))
     return "Binary path set"
+
+@mcp.tool()
+def unset():
+    """Close the IDA database and unset the binary path"""
+    global ida
+    if ida is None:
+        raise ValueError("Binary path not set")
+    ida.headlessida.clean_up()
+    ida = None
+    return "Binary path unset"
 
 @mcp.tool()
 def get_function(address: Annotated[int, "Address of the function"]):
@@ -61,11 +72,11 @@ def convert_number(text: Annotated[str, "Textual representation of the number to
     return ida.convert_number(text, size)
 
 @mcp.tool()
-def list_functions():
+async def list_functions():
     """List all functions"""
     if ida is None:
         raise ValueError("Binary path not set")
-    return ida.list_functions()
+    return await anyio.to_thread.run_sync(ida.list_functions)
 
 @mcp.tool()
 def decompile_checked(address: Annotated[int, "Address of the function to decompile"]):

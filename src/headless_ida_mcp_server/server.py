@@ -11,6 +11,7 @@ from headless_ida_mcp_server import PORT,TRANSPORT,HOST
 
 mcp = FastMCP("IDA MCP Server", port=PORT)
 ida = None
+functions = None
 
 @mcp.tool()
 async def set_binary_path(path: Annotated[str, "Path to the binary file"]):
@@ -22,11 +23,12 @@ async def set_binary_path(path: Annotated[str, "Path to the binary file"]):
 @mcp.tool()
 def unset():
     """Close the IDA database and unset the binary path"""
-    global ida
+    global ida, functions
     if ida is None:
         raise ValueError("Binary path not set")
     ida.headlessida.clean_up()
     ida = None
+    functions = None
     return "Binary path unset"
 
 @mcp.tool()
@@ -74,9 +76,14 @@ def convert_number(text: Annotated[str, "Textual representation of the number to
 @mcp.tool()
 async def list_functions():
     """List all functions"""
+    global functions
     if ida is None:
         raise ValueError("Binary path not set")
-    return await anyio.to_thread.run_sync(ida.list_functions)
+    if functions is not None:
+        return functions
+    else:
+        functions = await anyio.to_thread.run_sync(ida.list_functions)
+    return functions
 
 @mcp.tool()
 def decompile_checked(address: Annotated[int, "Address of the function to decompile"]):

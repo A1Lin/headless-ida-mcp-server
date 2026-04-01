@@ -3,6 +3,7 @@
 This project builds upon the work of:
 - Tools code adapted from [ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp) by mrexodia
 - Utilizes the [headless-ida](https://github.com/DennyDai/headless-ida) library by DennyDai
+- Fork and develop from [headless-ida-mcp-server](https://github.com/cnitlrt/headless-ida-mcp-server) by cnitlrt
 
 # Headless IDA MCP Server
 
@@ -12,7 +13,7 @@ If you want to run the server directly as a cli app, rather than an IDA plugin i
 Forked from https://github.com/cnitlrt/headless-ida-mcp-server with async support added.
 
 ## v2
-Rewrite all functions in `helper.py` using `idalib` sdk, removing the dependency on `headless_ida`, impore invocation speed.
+Rewrite all functions in `helper.py` using `idalib` sdk, removing the dependency on `headless_ida`, improve invocation speed.
 
 ## Project Description
 
@@ -32,8 +33,9 @@ This project uses IDA Pro's headless mode to analyze binary files and provides a
 1. Clone the project locally:
 
    ```bash
-   git clone https://github.com/cnitlrt/headless-ida-mcp-server.git 
+   git clone https://github.com/A1Lin/headless-ida-mcp-server.git 
    cd headless-ida-mcp-server
+   git checkout v1/v2
    ```
 
 2. Install dependencies:

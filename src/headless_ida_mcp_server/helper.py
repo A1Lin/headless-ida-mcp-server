@@ -73,17 +73,13 @@ class IDA():
             else:
                 return None
         except Exception as e:
-            err = f"Error getting function prototype for function at address {fn}"
-            print(err)
-            return err
+            return f"Error getting function prototype for function at address {fn}"
 
-    def get_function(self,address: int, *, raise_error=True) -> Optional[dict]:
+    def get_function(self, address: int, *, raise_error=True) -> Optional[dict]:
         fn = idaapi.get_func(address)
         if fn is None:
             if raise_error:
-                err = f"No function found at address {address}"
-                print(err)
-                return err
+                return f"No function found at address {address}"
             else:
                 return None
 
@@ -98,16 +94,14 @@ class IDA():
             "prototype": self.get_prototype(fn.start_ea),
         }
 
-    def get_function_by_name(self,name: Annotated[str, "Name of the function to get"]) -> Optional[dict]:
+    def get_function_by_name(self, name: Annotated[str, "Name of the function to get"]) -> Optional[dict]:
         """Get a function by its name"""
         function_address = idaapi.get_name_ea(idaapi.BADADDR, name)
         if function_address == idaapi.BADADDR:
-            err = f"No function found with name {name}"
-            print(err)
-            return err
+            return f"No function found with name {name}"
         return self.get_function(function_address)
 
-    def get_function_by_address(self,address: Annotated[int, "Address of the function to get"]) -> Optional[dict]:
+    def get_function_by_address(self, address: Annotated[int, "Address of the function to get"]) -> Optional[dict]:
         """Get a function by its address"""
         return self.get_function(address)
 
@@ -125,8 +119,7 @@ class IDA():
         try:
             value = int(text, 0)
         except ValueError:
-            print(f"Invalid number: {text}")
-            return None
+            return f"Invalid number: {text}"
         
         # Estimate the size of the number
         if not size:
@@ -142,9 +135,7 @@ class IDA():
         try:
             bytes = value.to_bytes(size, "little", signed=True)
         except OverflowError:
-            err = f"Number {text} is too big for {size} bytes"
-            print(err)
-            return err
+            return f"Number {text} is too big for {size} bytes"
 
         # Convert the bytes to ASCII
         ascii = ""
@@ -189,7 +180,8 @@ class IDA():
         """Decompile a function at the given address"""
         cfunc = self.decompile_checked(address)
         if not cfunc:
-            return ""
+            return f"Failed to decompile function at address {address}"
+        
         sv = cfunc.get_pseudocode()
         pseudocode = ""
         for _, sl in enumerate(sv):
@@ -198,15 +190,13 @@ class IDA():
             if len(pseudocode) > 0:
                 pseudocode += "\n"
             pseudocode += f"{line}"
-
         return pseudocode
     
     def disassemble_function(self, address: Annotated[int, "Address of the function to disassemble"]) -> str:
         """Get assembly code (address: instruction; comment) for a function"""
         func = idaapi.get_func(address)
         if not func:
-            print(f"No function found at address {address}")
-            return ""
+            return f"No function found at address {address}" 
 
         disassembly = ""
         for address in idaapi.func_item_iterator_t(func):
@@ -245,23 +235,23 @@ class IDA():
         return result
 
     def set_decompiler_comment(self, address: Annotated[int, "Address in the function to set the comment for"], 
-                               comment: Annotated[str, "Comment text (not shown in the disassembly)"]):
+                               comment: Annotated[str, "Comment text (not shown in the disassembly)"]) -> str:
         """Set a comment for a given address in the function pseudocode"""
 
         # Reference: https://cyber.wtf/2019/03/22/using-ida-python-to-analyze-trickbot/
         # Check if the address corresponds to a line
         cfunc = self.decompile_checked(address)
-
+        if cfunc is None:
+            return f"Failed to decompile function at address {address}"
         # Special case for function entry comments
         if address == cfunc.entry_ea:
             idc.set_func_cmt(address, comment, True)
             cfunc.refresh_func_ctext()
-            return
+            return "Comment set successfully"
 
         eamap = cfunc.get_eamap()
         if address not in eamap:
-            print(f"Failed to set comment at {address}")
-            return
+            return f"Failed to set comment at {address}"
         nearest_ea = eamap[address][0].ea
 
         # Remove existing orphan comments
@@ -278,16 +268,18 @@ class IDA():
             cfunc.save_user_cmts()
             cfunc.refresh_func_ctext()
             if not cfunc.has_orphan_cmts():
-                return
+                return "Comment set successfully"
             cfunc.del_orphan_cmts()
             cfunc.save_user_cmts()
-        print(f"Failed to set comment at {address}")
+        return f"Failed to set comment at {address}"
     
     def set_disassembly_comment(self, address: Annotated[int, "Address in the function to set the comment for"], 
                                 comment: Annotated[str, "Comment text (not shown in the pseudocode)"]):
         """Set a comment for a given address in the function disassembly"""
         if not idaapi.set_cmt(address, comment, False):
-            print(f"Failed to set comment at {address}")
+            return f"Failed to set comment at {address}"
+        else:
+            return "Comment set successfully"
 
     def refresh_decompiler_widget(self):
         widget = ida_kernwin.get_current_widget()
@@ -296,7 +288,7 @@ class IDA():
             if vu is not None:
                 vu.refresh_ctext()
     
-    def refresh_decompiler_ctext(self,function_address: int):
+    def refresh_decompiler_ctext(self, function_address: int):
         error = ida_hexrays.hexrays_failure_t()
         cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(function_address, error, ida_hexrays.DECOMP_WARNINGS)
         if cfunc:
@@ -308,48 +300,45 @@ class IDA():
         """Rename a local variable in a function"""
         func = idaapi.get_func(function_address)
         if not func:
-            print(f"No function found at address {function_address}")
-            return
+            return f"No function found at address {function_address}"
+        
         if not ida_hexrays.rename_lvar(func.start_ea, old_name, new_name):
-            print(f"Failed to rename local variable {old_name} in function {func.start_ea}")
-            return
+            return f"Failed to rename local variable {old_name} in function {func.start_ea}"
+        
         self.refresh_decompiler_ctext(func.start_ea)
+        return f"Local variable {old_name} renamed to {new_name} in function {func.start_ea}"
 
     def rename_function(self, function_address: Annotated[int, "Address of the function to rename"], 
                         new_name: Annotated[str, "New name for the function"]):
         """Rename a function"""
         fn = idaapi.get_func(function_address)
         if not fn:
-            print(f"No function found at address {function_address}")
-            return
+            return f"No function found at address {function_address}"
         
         if not idaapi.set_name(fn.start_ea, new_name):
-            print(f"Failed to rename function {fn.start_ea} to {new_name}")
-            return
+            return f"Failed to rename function {fn.start_ea} to {new_name}"
         
         self.refresh_decompiler_ctext(fn.start_ea)
+        return f"Function {fn.start_ea} renamed to {new_name}"
     
     def set_function_prototype(self, function_address: Annotated[int, "Address of the function"], 
                                prototype: Annotated[str, "New function prototype"]) -> str:
         """Set a function's prototype"""
         fn = idaapi.get_func(function_address)
         if not fn:
-            print(f"No function found at address {function_address}")
-            return
+            return f"No function found at address {function_address}"
         try:
             tif = ida_typeinf.tinfo_t()
             ida_typeinf.parse_decl(tif, None, prototype, ida_typeinf.PT_SIL | ida_typeinf.PT_TYP)
-            print(f"Parsed type: {str(tif)}")
             if not tif.is_func():
-                print(f"Parsed declaration is not a function type")
-                return
+                return f"Parsed declaration is not a function type"
             elif not ida_typeinf.apply_tinfo(fn.start_ea, tif, ida_typeinf.PT_SIL):
-                print(f"Failed to apply type")
-                return
+                return f"Failed to apply type"
             
             self.refresh_decompiler_ctext(fn.start_ea)
+            return f"Function prototype set successfully"
         except Exception as e:
-            print(f"Failed to parse prototype string: {prototype}")
+            return f"Failed to parse prototype string: {prototype}"
         
     def save_idb_file(self, save_path: Annotated[str, "Path to save the IDB file"]):
         ida_loader.save_database(save_path, 0)
@@ -357,46 +346,3 @@ class IDA():
     def clean_up(self, save_db = False):
         if self.open:
             idapro.close_database(save_db)
-
-if __name__ == "__main__":
-    ida_ = IDA("/mnt/d/ne8000/libicrm.so")
-    print("image size :" + str(ida_.get_image_size()))
-    print("entry points:")
-    #time.sleep(5)
-    print(len(ida_.get_entry_points()))
-    print("decompile function:")
-    print(ida_.decompile_function(1060032))
-    print("prototype:")
-    print(ida_.get_prototype(1060032))
-    print("get function:")
-    print(ida_.get_function(1060032))
-    print("get function by name:")
-    print(ida_.get_function_by_name("ICRM_ScAddIpPrefixNode_v6"))
-    print("get function by address:")
-    print(ida_.get_function_by_address(1060032))
-    print("get current address:")
-    print(hex(ida_.get_current_address()))
-    print("convert number:")
-    print(ida_.convert_number("0x1234", None))
-    print("list functions:")
-    print(len(ida_.list_functions()))
-    
-    print("disassemble function:")
-    print(ida_.disassemble_function(1060032))
-    print("get xrefs to:")
-    print(ida_.get_xrefs_to(1060032))
-    print("set decompiler comment:") 
-    ida_.set_decompiler_comment(1060032, "This is a comment in the pseudocode")
-    print("set disassembly comment:")
-    ida_.set_disassembly_comment(1060032, "This is a comment in the disassembly")
-    print("refresh decompiler widget:")
-    ida_.refresh_decompiler_widget()
-    print("refresh decompiler ctext:")
-    ida_.refresh_decompiler_ctext(1060032)
-    print("rename local variable:")
-    ida_.rename_local_variable(1060032, "v9", "my_variable_1")
-    print("rename function:")
-    ida_.rename_function(1060032, "ICRM_ScAddIpPrefixNode_v6")
-    print("set function prototype:")
-    ida_.set_function_prototype(1060032, "int (*)(char *, int);")
-    ida_.clean_up() 

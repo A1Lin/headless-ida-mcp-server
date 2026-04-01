@@ -85,13 +85,6 @@ async def list_functions():
     return functions
 
 @mcp.tool()
-def decompile_checked(address: Annotated[int, "Address of the function to decompile"]):
-    """Decompile a function at the given address"""
-    if ida is None:
-        raise ValueError("Binary path not set")
-    return ida.decompile_checked(address)
-
-@mcp.tool()
 def decompile_function(address: Annotated[int, "Address of the function to decompile"]):
     """Decompile a function at the given address"""
     if ida is None:

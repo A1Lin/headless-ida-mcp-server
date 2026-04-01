@@ -8,14 +8,24 @@ This project builds upon the work of:
 
 If you want to run the server directly as a cli app, rather than an IDA plugin interactively,you can chose it.
 
+## v1
+Forked from https://github.com/cnitlrt/headless-ida-mcp-server with async support added.
+
+## v2
+Rewrite all functions in `helper.py` using `idalib` sdk, removing the dependency on `headless_ida`, impore invocation speed.
+
 ## Project Description
 
 This project uses IDA Pro's headless mode to analyze binary files and provides a suite of tools via MCP to manage and manipulate functions, variables, and more.
 
 ## Prerequisites
-
+### v1
 - Python 3.12 or higher
 - IDA Pro with headless support (idat) https://github.com/DennyDai/headless-ida
+
+### v2
+- ida pro >= 9.0
+- python idalib https://docs.hex-rays.com/user-guide/idalib
 
 ## Installation
 
@@ -43,7 +53,7 @@ This project uses IDA Pro's headless mode to analyze binary files and provides a
 
 2. Configure the following environment variables in `.env`:
 
-   - `IDA_PATH`: Path to IDA Pro's headless executable (idat), e.g., `/home/ubuntu/idapro/idat`
+   - `IDA_PATH`: Path to IDA Pro's headless executable (idat), e.g., `/home/ubuntu/idapro/idat` (v1 only)
    - `PORT`: Port number for the MCP server, e.g., `8888`
    - `HOST`: Host address for the MCP server, e.g., `127.0.0.1`
    - `TRANSPORT`: MCP transport mode (`sse` or `stdio`)

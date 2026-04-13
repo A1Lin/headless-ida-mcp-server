@@ -13,9 +13,12 @@ mcp = FastMCP("IDA MCP Server", port=PORT)
 ida = None
 
 @mcp.tool()
-async def set_binary_path(path: Annotated[str, "Path to the binary file"]):
+def set_binary_path(path: Annotated[str, "Path to the binary file"]):
     """Set the path to the binary file"""
     global ida
+    if ida is not None:
+        return "Binary path already set, call unset first"
+    
     ida = IDA(path)
     if ida.open is True:
         return "Binary path set"
@@ -76,7 +79,7 @@ def convert_number(text: Annotated[str, "Textual representation of the number to
     return ida.convert_number(text, size)
 
 @mcp.tool()
-async def list_functions():
+def list_functions():
     """List all functions"""
     if ida is None:
         raise ValueError("Binary path not set")
@@ -132,13 +135,6 @@ def refresh_decompiler_widget():
     if ida is None:
         raise ValueError("Binary path not set")
     return ida.refresh_decompiler_widget()
-
-@mcp.tool()
-def refresh_decompiler_ctext(function_address: Annotated[int, "Address of the function to refresh the decompiler ctext for"]):
-    """Refresh the decompiler ctext for a given function"""
-    if ida is None:
-        raise ValueError("Binary path not set")
-    return ida.refresh_decompiler_ctext(function_address)
 
 @mcp.tool()
 def rename_local_variable(function_address: Annotated[int, "Address of the function containing the variable"],old_name: Annotated[str, "Current name of the variable"],new_name: Annotated[str, "New name for the variable"]):

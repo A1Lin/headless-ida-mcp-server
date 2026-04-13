@@ -3,6 +3,8 @@ try:
 except ImportError:
     import idapro
  
+import os
+
 import ida_nalt
 import idaapi
 import ida_funcs
@@ -47,6 +49,10 @@ class ConvertedNumber(TypedDict):
 class IDA():
     def __init__(self, binary_path: Annotated[str, "Path to the binary file"]):
         try:
+            if not os.path.exists(binary_path):
+                self.open = False
+                print(f"Binary file does not exist: {binary_path}")
+                return
             idapro.open_database(binary_path, True)
             self.open = True
         except Exception as e:

@@ -1,6 +1,6 @@
 [project]
 name = "headless-ida-mcp-server"
-version = "0.2.0"
+version = "0.3.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,3 +13,6 @@ dependencies = [
 ]
 [project.scripts]
 headless_ida_mcp_server = "headless_ida_mcp_server.server:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

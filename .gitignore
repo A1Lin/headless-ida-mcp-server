@@ -5,6 +5,16 @@ build/
 dist/
 wheels/
 *.egg-info
+# the whole test tree is local-only: test code references private firmware
+# samples (never committed) — keep it out of the repository entirely
+test/
+# IDA database sidecars generated while opening any binary
+*.i64
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
 
 # Virtual environments
 .venv/

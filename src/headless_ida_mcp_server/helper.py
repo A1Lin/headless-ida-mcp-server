@@ -1,24 +1,87 @@
-try:
-    import ida as idapro
-except ImportError:
-    import idapro
- 
+# -*- coding: utf-8 -*-
+"""idalib-backed IDA operations.
+
+idalib hard requirements:
+
+* one database per process, and ``open_database()`` must run *before* any
+  other ``ida_*`` module may be imported;
+* ``import idapro`` (or ``import ida as idapro``) must come *first*.
+
+Therefore this module performs **no idalib import at import time**. Two
+loaders below inject the modules into THIS module's globals so the method
+bodies keep resolving them by name without any import statements:
+
+* ``_import_idapro()``      -- idempotent, run *before* open_database();
+* ``_load_idalib_modules()`` -- run only *after* open_database() succeeded.
+
+Opening/closing the database itself is owned by the worker process
+(``worker.open_backend`` sequences ``_import_idapro()`` → ``open_database()``
+→ ``_load_idalib_modules()`` → ``IDA()``). The parent process (server /
+session manager) must never import the idalib code paths in this module.
+"""
 import os
-
-import ida_nalt
-import idaapi
-import ida_funcs
-import ida_typeinf
-import idc
-import idautils
-import ida_hexrays
-import ida_kernwin
-import ida_lines
-import ida_xref
-import ida_loader
-
 import struct
+
 from typing import Optional, TypedDict, Annotated
+
+# idalib modules are injected into module globals by the loaders below.
+_IDAPRO_READY = False
+_MODULES_LOADED = False
+
+
+def _import_idapro():
+    """Import the idalib core module (idempotent); run BEFORE open_database().
+
+    Retains the historical compatibility order: the ``ida`` spelling is
+    preferred, falling back to ``idapro``.
+    """
+    global _IDAPRO_READY
+    if _IDAPRO_READY:
+        return globals()["idapro"]
+    try:
+        idapro = __import__("ida")
+    except ImportError:
+        idapro = __import__("idapro")
+    globals()["idapro"] = idapro
+    _IDAPRO_READY = True
+    return idapro
+
+
+def _load_idalib_modules():
+    """Import the remaining ida_* modules; run only AFTER open_database().
+
+    Each module is written into module globals so the method bodies below
+    resolve the names without import statements.
+    """
+    global _MODULES_LOADED
+    if _MODULES_LOADED:
+        return
+    import idaapi
+    import ida_nalt
+    import ida_funcs
+    import ida_typeinf
+    import idc
+    import idautils
+    import ida_hexrays
+    import ida_kernwin
+    import ida_lines
+    import ida_xref
+    import ida_loader
+    globals().update(
+        idaapi=idaapi,
+        ida_nalt=ida_nalt,
+        ida_funcs=ida_funcs,
+        ida_typeinf=ida_typeinf,
+        idc=idc,
+        idautils=idautils,
+        ida_hexrays=ida_hexrays,
+        ida_kernwin=ida_kernwin,
+        ida_lines=ida_lines,
+        ida_xref=ida_xref,
+        ida_loader=ida_loader,
+    )
+    _MODULES_LOADED = True
+
 
 class Function(TypedDict):
     start_address: int
@@ -47,17 +110,15 @@ class ConvertedNumber(TypedDict):
     binary: str
 
 class IDA():
-    def __init__(self, binary_path: Annotated[str, "Path to the binary file"]):
-        try:
-            if not os.path.exists(binary_path):
-                self.open = False
-                print(f"Binary file does not exist: {binary_path}")
-                return
-            idapro.open_database(binary_path, True)
-            self.open = True
-        except Exception as e:
-            self.open = False
-            print(f"Failed to open database: {e}")
+    def __init__(self):
+        """Wrap the database that is ALREADY open in this process.
+
+        The caller (worker.open_backend) is responsible for the idalib import
+        order: ``_import_idapro()`` → ``open_database()`` →
+        ``_load_idalib_modules()`` → ``IDA()``.
+        """
+        _load_idalib_modules()
+        self.open = True
 
     def get_image_size(self):
         omax_ea = idaapi.inf_get_max_ea()
@@ -70,6 +131,11 @@ class IDA():
         if header and header[:4] == b"PE\0\0":
             image_size = struct.unpack("<I", header[0x50:0x54])[0]
         return image_size
+
+    def get_function_count(self) -> int:
+        """Lightweight function count (open-ack smoke test: proves auto-analysis
+        produced functions without materializing the whole function list)."""
+        return ida_funcs.get_func_qty()
 
     def get_prototype(self, fn: int) -> Optional[str]:
         try:
@@ -119,14 +185,14 @@ class IDA():
         """Get the function currently selected by the user"""
         return self.get_function(idaapi.get_screen_ea())
 
-    def convert_number(self, text: Annotated[str, "Textual representation of the number to convert"], 
+    def convert_number(self, text: Annotated[str, "Textual representation of the number to convert"],
                        size: Annotated[Optional[int], "Size of the variable in bytes"]) -> ConvertedNumber:
         """Convert a number (decimal, hexadecimal) to different representations"""
         try:
             value = int(text, 0)
         except ValueError:
             return f"Invalid number: {text}"
-        
+
         # Estimate the size of the number
         if not size:
             size = 0
@@ -159,7 +225,7 @@ class IDA():
             "ascii": ascii,
             "binary": bin(value)
         }
-    
+
     def list_functions(self) -> list[Function]:
         """List all functions in the database"""
         return [self.get_function(address) for address in idautils.Functions()]
@@ -168,7 +234,7 @@ class IDA():
         if not ida_hexrays.init_hexrays_plugin():
             print("Hex-Rays decompiler is not available")
             return None
-        
+
         error = ida_hexrays.hexrays_failure_t()
         cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(address, error, ida_hexrays.DECOMP_WARNINGS)
         if not cfunc:
@@ -181,13 +247,13 @@ class IDA():
             return None
         return cfunc
 
-    
+
     def decompile_function(self, address: Annotated[int, "Address of the function to decompile"]) -> str:
         """Decompile a function at the given address"""
         cfunc = self.decompile_checked(address)
         if not cfunc:
             return f"Failed to decompile function at address {address}"
-        
+
         sv = cfunc.get_pseudocode()
         pseudocode = ""
         for _, sl in enumerate(sv):
@@ -197,12 +263,12 @@ class IDA():
                 pseudocode += "\n"
             pseudocode += f"{line}"
         return pseudocode
-    
+
     def disassemble_function(self, address: Annotated[int, "Address of the function to disassemble"]) -> str:
         """Get assembly code (address: instruction; comment) for a function"""
         func = idaapi.get_func(address)
         if not func:
-            return f"No function found at address {address}" 
+            return f"No function found at address {address}"
 
         disassembly = ""
         for address in idaapi.func_item_iterator_t(func):
@@ -216,7 +282,7 @@ class IDA():
             if comment:
                 disassembly += f"; {comment}"
         return disassembly
-    
+
     def get_xrefs_to(self, address: Annotated[int, "Address to get cross references to"]) -> list[Xref]:
         """Get all cross references to the given address"""
         xrefs = []
@@ -228,7 +294,7 @@ class IDA():
                 "function": self.get_function(xref.frm, raise_error=False),
             })
         return xrefs
-    
+
     def get_entry_points(self) -> list[Function]:
         """Get all entry points in the database"""
         result = []
@@ -240,7 +306,7 @@ class IDA():
                 result.append(func)
         return result
 
-    def set_decompiler_comment(self, address: Annotated[int, "Address in the function to set the comment for"], 
+    def set_decompiler_comment(self, address: Annotated[int, "Address in the function to set the comment for"],
                                comment: Annotated[str, "Comment text (not shown in the disassembly)"]) -> str:
         """Set a comment for a given address in the function pseudocode"""
 
@@ -278,9 +344,9 @@ class IDA():
             cfunc.del_orphan_cmts()
             cfunc.save_user_cmts()
         return f"Failed to set comment at {address}"
-    
-    def set_disassembly_comment(self, address: Annotated[int, "Address in the function to set the comment for"], 
-                                comment: Annotated[str, "Comment text (not shown in the pseudocode)"]):
+
+    def set_disassembly_comment(self, address: Annotated[int, "Address in the function to set the comment for"],
+                                 comment: Annotated[str, "Comment text (not shown in the pseudocode)"]):
         """Set a comment for a given address in the function disassembly"""
         if not idaapi.set_cmt(address, comment, False):
             return f"Failed to set comment at {address}"
@@ -293,41 +359,41 @@ class IDA():
             vu = ida_hexrays.get_widget_vdui(widget)
             if vu is not None:
                 vu.refresh_ctext()
-    
+
     def refresh_decompiler_ctext(self, function_address: int):
         error = ida_hexrays.hexrays_failure_t()
         cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(function_address, error, ida_hexrays.DECOMP_WARNINGS)
         if cfunc:
             cfunc.refresh_func_ctext()
-    
-    def rename_local_variable(self, function_address: Annotated[int, "Address of the function containing the variable"], 
-                              old_name: Annotated[str, "Current name of the variable"], 
+
+    def rename_local_variable(self, function_address: Annotated[int, "Address of the function containing the variable"],
+                              old_name: Annotated[str, "Current name of the variable"],
                               new_name: Annotated[str, "New name for the variable"]):
         """Rename a local variable in a function"""
         func = idaapi.get_func(function_address)
         if not func:
             return f"No function found at address {function_address}"
-        
+
         if not ida_hexrays.rename_lvar(func.start_ea, old_name, new_name):
             return f"Failed to rename local variable {old_name} in function {func.start_ea}"
-        
+
         self.refresh_decompiler_ctext(func.start_ea)
         return f"Local variable {old_name} renamed to {new_name} in function {func.start_ea}"
 
-    def rename_function(self, function_address: Annotated[int, "Address of the function to rename"], 
+    def rename_function(self, function_address: Annotated[int, "Address of the function to rename"],
                         new_name: Annotated[str, "New name for the function"]):
         """Rename a function"""
         fn = idaapi.get_func(function_address)
         if not fn:
             return f"No function found at address {function_address}"
-        
+
         if not idaapi.set_name(fn.start_ea, new_name):
             return f"Failed to rename function {fn.start_ea} to {new_name}"
-        
+
         self.refresh_decompiler_ctext(fn.start_ea)
         return f"Function {fn.start_ea} renamed to {new_name}"
-    
-    def set_function_prototype(self, function_address: Annotated[int, "Address of the function"], 
+
+    def set_function_prototype(self, function_address: Annotated[int, "Address of the function"],
                                prototype: Annotated[str, "New function prototype"]) -> str:
         """Set a function's prototype"""
         fn = idaapi.get_func(function_address)
@@ -340,15 +406,22 @@ class IDA():
                 return f"Parsed declaration is not a function type"
             elif not ida_typeinf.apply_tinfo(fn.start_ea, tif, ida_typeinf.PT_SIL):
                 return f"Failed to apply type"
-            
+
             self.refresh_decompiler_ctext(fn.start_ea)
             return f"Function prototype set successfully"
         except Exception as e:
             return f"Failed to parse prototype string: {prototype}"
-        
+
     def save_idb_file(self, save_path: Annotated[str, "Path to save the IDB file"]):
         ida_loader.save_database(save_path, 0)
-    
+
     def clean_up(self, save_db = False):
-        if self.open:
+        """Close the open database; safe to call again afterwards (no-op).
+
+        All worker exit paths (close op / EOF / SIGTERM / BrokenPipe /
+        KeyboardInterrupt) funnel into this method via worker.graceful_exit().
+        """
+        idapro = globals().get("idapro")
+        if self.open and idapro is not None:
+            self.open = False
             idapro.close_database(save_db)

@@ -21,9 +21,8 @@ from typing import Optional, Annotated
 from mcp.server import FastMCP
 from mcp.server.fastmcp.prompts import base
 
-from headless_ida_mcp_server import PORT, TRANSPORT
 from headless_ida_mcp_server.logger import logger
-from headless_ida_mcp_server.session import SessionManager
+from headless_ida_mcp_server.session import SessionManager, apply_cli_overrides
 
 sessions = SessionManager()
 
@@ -43,7 +42,9 @@ async def _lifespan(app):
         await sessions.shutdown_all()
 
 
-mcp = FastMCP("IDA MCP Server", port=PORT, lifespan=_lifespan)
+# port default lives here (a --port flag still overrides it via settings);
+# host keeps FastMCP's own default (127.0.0.1), overridable with --host.
+mcp = FastMCP("IDA MCP Server", port=8888, lifespan=_lifespan)
 
 
 # ── session lifecycle tools ─────────────────────────────────────────────────
@@ -267,21 +268,58 @@ def exploit_prompt():
 def main():
     """Run the MCP server.
 
-    Optional CLI arguments override the .env settings (useful for launchers
-    and tests, which must not fight load_dotenv(override=True)):
-    ``headless_ida_mcp_server [transport] [--host HOST] [--port PORT]``.
+    CLI flags are the ONLY configuration channel — anything not passed uses
+    the built-in defaults (there is no .env / environment-variable
+    configuration by design):
+    ``headless_ida_mcp_server [transport] [--host HOST] [--port PORT]
+    [--max-sessions N] [--dead-session-retention N] [--max-response-bytes N]
+    [--open-timeout-base SECONDS]``.
     """
     parser = argparse.ArgumentParser(prog="headless_ida_mcp_server")
-    parser.add_argument("transport", nargs="?", default=TRANSPORT,
-                        help="sse | stdio (default: TRANSPORT from .env)")
-    parser.add_argument("--host", default=None, help="bind host (default: HOST from .env)")
-    parser.add_argument("--port", type=int, default=None, help="bind port (default: PORT from .env)")
+    parser.add_argument("transport", nargs="?", default="streamable-http",
+                        choices=("sse", "stdio", "streamable-http"),
+                        help="sse | stdio | streamable-http (default: streamable-http)")
+    parser.add_argument("--host", default=None, help="bind host (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=None, help="bind port (default: 8888)")
+    parser.add_argument("--max-sessions", type=int, default=None, metavar="N",
+                        help="concurrent worker limit (default: 16)")
+    parser.add_argument("--dead-session-retention", type=int, default=None, metavar="N",
+                        help="DEAD tombstones kept by list_sessions, -1 = forever (default: 4)")
+    parser.add_argument("--max-response-bytes", type=int, default=None, metavar="N",
+                        help="single-line protocol response limit in bytes (default: 268435456)")
+    parser.add_argument("--open-timeout-base", type=float, default=None, metavar="SECONDS",
+                        help="base seconds of the size-aware open timeout; the fixed "
+                             "formula adds 6*MB^1.5 for raw binaries / 6*MB for .i64, "
+                             "capped at 24h (default: 120)")
     args = parser.parse_args()
     if args.host is not None:
         mcp.settings.host = args.host
     if args.port is not None:
         mcp.settings.port = args.port
-    mcp.run(transport=args.transport)
+    if args.max_sessions is not None and args.max_sessions < 1:
+        parser.error("--max-sessions must be >= 1")
+    if args.dead_session_retention is not None and args.dead_session_retention < -1:
+        parser.error("--dead-session-retention must be >= -1 (-1 keeps tombstones forever)")
+    if args.max_response_bytes is not None and args.max_response_bytes < 1:
+        parser.error("--max-response-bytes must be >= 1")
+    if args.open_timeout_base is not None and args.open_timeout_base <= 0:
+        parser.error("--open-timeout-base must be > 0")
+    apply_cli_overrides(max_sessions=args.max_sessions,
+                        dead_retention=args.dead_session_retention,
+                        max_response_bytes=args.max_response_bytes,
+                        open_timeout_base=args.open_timeout_base)
+    try:
+        mcp.run(transport=args.transport)
+    except KeyboardInterrupt:
+        # Graceful-shutdown completion, not a crash: uvicorn (>= 0.39) runs
+        # its full graceful shutdown — including our lifespan shutdown_all()
+        # that saves and reaps every worker — and then DELIBERATELY re-raises
+        # the captured SIGINT so the process looks like a canonical Ctrl+C
+        # death to the shell. By the time we get here cleanup has already
+        # happened, so intercept the re-raise for a clean, traceback-free
+        # exit. (The stdio transport raises KeyboardInterrupt directly during
+        # unwinding; its lifespan cleanup has also completed by then.)
+        logger.info("interrupted after graceful shutdown; all workers saved and reaped")
 
 if __name__ == "__main__":
     main()

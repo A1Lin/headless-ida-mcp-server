@@ -30,14 +30,63 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
-from . import (DEAD_SESSION_RETENTION, MAX_RESPONSE_BYTES, MAX_SESSIONS, OPEN_TIMEOUT,
-               OPEN_TIMEOUT_BASE, OPEN_TIMEOUT_MAX, OPEN_TIMEOUT_PER_MB, OPEN_TIMEOUT_POWER)
 from .logger import logger
+
+# ── configuration knobs (CLI-overridable; the values here are the defaults) ──
+# There is no .env / environment configuration by design: server.main()
+# parses every flag and calls apply_cli_overrides() below. The knobs are
+# module globals read at use time, so late rebinding reaches a SessionManager
+# that was already constructed at import time (the exact monkeypatch surface
+# the tests rely on).
+MAX_SESSIONS = 16                         # concurrent non-DEAD workers
+DEAD_SESSION_RETENTION = 4                # tombstones kept; -1 = forever
+MAX_RESPONSE_BYTES = 256 * 1024 * 1024    # single-line protocol limit (256MB)
+
+# Size-aware open timeout. ONLY OPEN_TIMEOUT_BASE is configurable (CLI
+# --open-timeout-base); the rest of the formula is fixed:
+#   raw binary:  BASE + _PER_MB * MB ** _POWER     (defaults: 120 + 6·MB^1.5)
+#   .i64/.idb:   BASE + _PER_MB * MB               (already analyzed: load only)
+#   capped at _MAX (fixed 24h sanity ceiling)
+OPEN_TIMEOUT_BASE = 120.0    # floor: spawn + idalib init + load
+_OPEN_TIMEOUT_PER_MB = 6.0   # seconds per MB**POWER (raw) / per MB (.i64)
+_OPEN_TIMEOUT_POWER = 1.5    # analysis is super-linear in code size
+_OPEN_TIMEOUT_MAX = 86400.0  # 24h sanity ceiling
+
+# NOTE: there is intentionally no CALL_TIMEOUT / SAVE_TIMEOUT: analysis ops
+# (decompile of huge functions, list_functions) and database saves of
+# GB-scale .i64 files legitimately run for many minutes — a fixed bound would
+# kill them half-way. Recovery from a genuinely hung worker is close_session /
+# restart_session (SIGTERM → SIGKILL escalation), or killing the pid shown by
+# list_sessions. Callers that DO want a bound can pass per-call `timeout=`.
 
 # ── close-ladder tuning knobs (seconds; module-level for test overriding) ────
 _CLOSE_LOCK_TIMEOUT = 10.0    # §5.4 step 0: bounded write_lock acquire
 _POST_CLOSE_EXIT_WAIT = 10.0   # worker replied to close: bounded wait for exit
 _TERM_EXIT_WAIT = 5.0          # §5.4 step 2: wait for exit after SIGTERM
+
+
+def apply_cli_overrides(*, max_sessions: Optional[int] = None,
+                        dead_retention: Optional[int] = None,
+                        max_response_bytes: Optional[int] = None,
+                        open_timeout_base: Optional[float] = None) -> None:
+    """Apply the ``--max-sessions`` / ``--dead-session-retention`` /
+    ``--max-response-bytes`` / ``--open-timeout-base`` CLI flags parsed in
+    ``server.main()``.
+
+    The knobs are module globals read at *use* time (the exact surface the
+    tests monkeypatch), so rebinding them here reaches a SessionManager that
+    was already constructed at import time. CLI flags are the ONLY
+    configuration channel — everything else is the built-in defaults.
+    """
+    global MAX_SESSIONS, DEAD_SESSION_RETENTION, MAX_RESPONSE_BYTES, OPEN_TIMEOUT_BASE
+    if max_sessions is not None:
+        MAX_SESSIONS = max_sessions
+    if dead_retention is not None:
+        DEAD_SESSION_RETENTION = dead_retention
+    if max_response_bytes is not None:
+        MAX_RESPONSE_BYTES = max_response_bytes
+    if open_timeout_base is not None:
+        OPEN_TIMEOUT_BASE = open_timeout_base
 
 
 class WorkerError(RuntimeError):
@@ -49,24 +98,23 @@ def _open_timeout_for(binary_path: str) -> float:
 
     IDA auto-analysis grows super-linearly with binary size, so a flat value
     either false-fails big samples or makes small broken ones wait forever.
+    Only ``OPEN_TIMEOUT_BASE`` is configurable (CLI ``--open-timeout-base``);
+    the rest of the formula is fixed (see the knobs block above).
 
-    * ``OPEN_TIMEOUT`` env set to a positive number → flat override (escape hatch);
-    * raw binary: ``BASE + PER_MB * MB ** POWER`` (default 120 + 6·MB^1.5):
+    * raw binary: ``BASE + _PER_MB * MB ** _POWER`` (default 120 + 6·MB^1.5):
         1 MB→2min, 10 MB→5min, 100 MB→1.7h;
-    * ``.i64``/``.idb``: already analyzed, loading only → linear ``BASE + PER_MB·MB``;
-    * capped at ``OPEN_TIMEOUT_MAX`` (default 24h) as a sanity ceiling.
+    * ``.i64``/``.idb``: already analyzed, loading only → linear ``BASE + _PER_MB·MB``;
+    * capped at ``_MAX`` (fixed 24h) as a sanity ceiling.
     """
-    if OPEN_TIMEOUT > 0:
-        return OPEN_TIMEOUT
     try:
         size_mb = os.path.getsize(binary_path) / (1024 * 1024)
     except OSError:
         size_mb = 0.0
     if binary_path.lower().endswith((".i64", ".idb")):
-        timeout = OPEN_TIMEOUT_BASE + OPEN_TIMEOUT_PER_MB * size_mb
+        timeout = OPEN_TIMEOUT_BASE + _OPEN_TIMEOUT_PER_MB * size_mb
     else:
-        timeout = OPEN_TIMEOUT_BASE + OPEN_TIMEOUT_PER_MB * (size_mb ** OPEN_TIMEOUT_POWER)
-    return min(timeout, OPEN_TIMEOUT_MAX)
+        timeout = OPEN_TIMEOUT_BASE + _OPEN_TIMEOUT_PER_MB * (size_mb ** _OPEN_TIMEOUT_POWER)
+    return min(timeout, _OPEN_TIMEOUT_MAX)
 
 
 def _silence_future_exception(fut: asyncio.Future) -> None:
@@ -179,8 +227,7 @@ class SessionManager:
             raise TimeoutError(
                 f"open of {apath} timed out after {session.open_timeout:.0f}s "
                 "(auto-analysis of large samples can take much longer; the timeout "
-                "is size-aware — tune OPEN_TIMEOUT_BASE/OPEN_TIMEOUT_PER_MB or set "
-                "OPEN_TIMEOUT for a flat override)"
+                "is size-aware — tune it with --open-timeout-base)"
             ) from None
         except WorkerError as e:
             await self._close_ladder(session, save=False, reason="crashed", send_close=False)
@@ -233,8 +280,8 @@ class SessionManager:
                 # open is still stuck inside native code: SIGTERM then SIGKILL
                 await self._close_ladder(session, save=save, reason="timeout-killed", send_close=False)
                 _silence_abandoned_future(session.open_future)
-                return (f"session {session_id} killed: open still running after OPEN_TIMEOUT "
-                        f"(close_reason: {session.close_reason})")
+                return (f"session {session_id} killed: open still running after "
+                        f"{session.open_timeout:.0f}s (close_reason: {session.close_reason})")
             except asyncio.CancelledError:
                 raise
             except Exception:

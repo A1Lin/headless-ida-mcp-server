@@ -1,13 +1,11 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+.pytest_cache/
 build/
 dist/
 wheels/
 *.egg-info
-# the whole test tree is local-only: test code references private firmware
-# samples (never committed) — keep it out of the repository entirely
-test/
 # IDA database sidecars generated while opening any binary
 *.i64
 *.id0
@@ -15,11 +13,13 @@ test/
 *.id2
 *.nam
 *.til
+# bench/audit measurement outputs — machine-specific timing data regenerated
+# on every run (the .so sample inputs themselves are tracked)
+test/samples/*.jsonl
 
 # Virtual environments
 .venv/
 .vscode/
 .python-version
 .cursor/
-.env
 exploit.py

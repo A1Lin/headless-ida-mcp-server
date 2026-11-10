@@ -5,9 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "dotenv>=0.9.9",
-    "fastmcp>=0.4.1",
-    "mcp>=1.6.0",
+    "mcp>=1.26.0",
+]
+[project.optional-dependencies]
+test = [
     "pytest>=8.3.5",
     "pytest-asyncio>=0.26.0",
 ]
